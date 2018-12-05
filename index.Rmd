@@ -1,0 +1,129 @@
+---
+title: "Practical Machine Learning Project"
+author: "Carson"
+date: "December 4, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+
+## Load necessary data from web
+```{r Load Data, message=FALSE, cache=TRUE}
+library(caret); library(data.table); library(DataExplorer); library(ggplot2); library(dplyr); library(tidyr); library(naniar); library(readr)
+
+# Load training and test data
+csTrainingDf <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"), na.strings = '', stringsAsFactors = FALSE)
+csTestingDf <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"), na.strings = '', stringsAsFactors = FALSE)
+
+csTrainingDf <- setDT(csTrainingDf)
+csTestingDf <- setDT(csTestingDf)
+```
+
+
+## Explore Data
+The next step is to perform exploratory data analysis. We first look at the number of missing (NA) values in the training data frame. We also look to see if the 
+response variable (classe) is balanced. 
+```{r Exploratory Data Analysis}
+# Identify fields with a high rate of missing values
+plot_missing(csTrainingDf)
+
+# Check to see how the balanced the data set is
+table(csTrainingDf$classe)
+```
+
+## Data Pre-processing
+In both the training and testing sets we need to convert all values equal to 0 to NAs, otherwise the model will interpret values == 0 as a numeric value, and not
+a missing data point. We will then exclude fields that are mostly null values. 
+
+We are also going to remove the 'X' field, as that is a row identifier
+```{r preprocessing, results = "hide", warning = FALSE}
+# Convert all character values into numeric
+csTrainingDf[,1:159] <- lapply(csTrainingDf[,1:159], as.numeric)
+csTestingDf[,1:159] <- lapply(csTestingDf[,1:159], as.numeric)
+
+csTrainCols <- setDT(csTrainingDf)[ , colSums(is.na(csTrainingDf)) == 0]
+csTrainingDf2 <- setDT(csTrainingDf)[, ..csTrainCols]
+
+
+csTrainingDf2$classe <- as.factor(csTrainingDf2$classe)
+csTrainingDf2 <- setDT(csTrainingDf2)[,!"X"]
+
+# Testing set
+#csTestingDf <- csTestingDf %>% replace_with_na_all(condition = ~.x == "NA")
+csTestCols <- setDT(csTestingDf)[ , colSums(is.na(csTestingDf)) == 0]
+csTestingDf2 <- setDT(csTestingDf)[, ..csTestCols]
+
+csTestingDf2 <- setDT(csTestingDf2)[,!"X"]
+
+```
+
+
+## Split training data into Training and Validation test sets
+```{r split data, results = "hide"}
+library(caret)
+inTrain <- createDataPartition(y = csTrainingDf2$classe, p=0.7, list=FALSE)
+trainDf <- csTrainingDf2[inTrain,]
+validationDf <- csTrainingDf2[-inTrain,]
+```
+
+## Build GBM Model
+We will now train both a bossting (GBM) and bagging model (Random Forest) to predict the type of work out
+```{r build GBM, results = "hide", warning = FALSE, cache=TRUE}
+set.seed(33233)
+trainCont <- trainControl(method = "cv",
+                          number = 3,
+                          verboseIter = FALSE)
+
+csGbmFit <- train(y = trainDf$classe,
+                  x = setDT(trainDf)[,!"classe"],
+                  method = "gbm",
+                  trControl = trainCont)
+
+validationDf$gbmPredict <- predict(csGbmFit, newdata=validationDf)
+```
+
+### View Variable Importance
+```{r variable importance GBM}
+as.data.frame(summary(csGbmFit$finalModel))
+```
+
+## Build RF Model
+Train a Random Forest model, and then cross-validate on 'validationDf'
+```{r build RF, cache=TRUE, message=FALSE}
+set.seed(33233)
+
+trainCont <- trainControl(method = "cv",
+                          number = 3,
+                          verboseIter = FALSE)
+
+csRfFit <- train(y = trainDf$classe,
+                  x = setDT(trainDf)[,!"classe"],
+                  method = "rf",
+                  trControl = trainCont)
+
+validationDf$rfPredict <- predict(csRfFit, newdata = validationDf)
+```
+
+
+We can see that the random Forest model performs slightly better (99.91% accuracy) when compared to the GBM model (99.57% accuracy)
+```{r Measure Performance}
+# GBM Model
+mean(validationDf$gbmPredict == validationDf$classe)
+
+# Random Forest Model
+mean(validationDf$rfPredict == validationDf$classe)
+```
+
+
+## Model Predictions
+We can now apply our Random Forest model to our test set
+```{r Predict on test set}
+csPredictions <- predict(csRfFit, newdata = csTestingDf2)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
